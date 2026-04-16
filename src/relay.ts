@@ -21,6 +21,7 @@ import {
   getRelevantContext,
 } from "./memory.ts";
 import {
+  buildTelegramAllowlist,
   buildClaudeEnv,
   getTelegramAccessDecision,
   isWithinLimit,
@@ -35,10 +36,10 @@ const PROJECT_ROOT = dirname(dirname(import.meta.path));
 // ============================================================
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const ALLOWED_USER_ID = process.env.TELEGRAM_USER_ID || "";
 const CLAUDE_PATH = process.env.CLAUDE_PATH || "claude";
 const PROJECT_DIR = process.env.PROJECT_DIR || "";
 const RELAY_DIR = process.env.RELAY_DIR || join(process.env.HOME || "~", ".claude-relay");
+const TELEGRAM_ALLOWLIST = buildTelegramAllowlist(process.env);
 const MAX_TEXT_CHARS = parsePositiveInt(process.env.MAX_TEXT_CHARS, 12000);
 const MAX_IMAGE_BYTES = parsePositiveInt(process.env.MAX_IMAGE_BYTES, 10 * 1024 * 1024);
 const MAX_DOCUMENT_BYTES = parsePositiveInt(
@@ -147,9 +148,13 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-if (!ALLOWED_USER_ID) {
-  console.error("TELEGRAM_USER_ID not set!");
-  console.log("\nRefusing to start without an authorized Telegram user.");
+if (
+  TELEGRAM_ALLOWLIST.allowedUserIds.size === 0 &&
+  TELEGRAM_ALLOWLIST.allowedChatIds.size === 0
+) {
+  console.error("Telegram allowlist not configured!");
+  console.log("\nSet TELEGRAM_ALLOWED_USER_IDS and/or TELEGRAM_ALLOWED_CHAT_IDS.");
+  console.log("Legacy TELEGRAM_USER_ID is still supported as a single-user fallback.");
   process.exit(1);
 }
 
@@ -212,24 +217,23 @@ const bot = new Bot(BOT_TOKEN);
 
 bot.use(async (ctx, next) => {
   const decision = getTelegramAccessDecision({
-    allowedUserId: ALLOWED_USER_ID,
+    allowedUserIds: TELEGRAM_ALLOWLIST.allowedUserIds,
+    allowedChatIds: TELEGRAM_ALLOWLIST.allowedChatIds,
     fromId: ctx.from?.id.toString(),
+    chatId: ctx.chat?.id,
     chatType: ctx.chat?.type,
   });
 
-  if (decision === "ignore_non_private") {
-    console.log(`Ignoring non-private chat: ${ctx.chat?.id}`);
-    return;
-  }
-
-  if (decision === "reject_unauthorized") {
-    console.log(`Unauthorized private chat access: ${ctx.from?.id}`);
+  if (decision === "reject_chat_not_allowed") {
+    console.log(
+      `Rejected chat access: chat=${ctx.chat?.id} user=${ctx.from?.id ?? "unknown"}`
+    );
     await ctx.reply("This bot is private.");
     return;
   }
 
   if (decision !== "allow") {
-    console.log("Access denied: TELEGRAM_USER_ID is not configured correctly.");
+    console.log("Access denied: Telegram allowlist is not configured correctly.");
     return;
   }
 
@@ -585,7 +589,8 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
 // ============================================================
 
 console.log("Starting Claude Telegram Relay...");
-console.log(`Authorized user: ${ALLOWED_USER_ID}`);
+console.log(`Allowed users: ${TELEGRAM_ALLOWLIST.allowedUserIds.size}`);
+console.log(`Allowed chats: ${TELEGRAM_ALLOWLIST.allowedChatIds.size}`);
 console.log(`Project directory: ${PROJECT_DIR || "(relay working directory)"}`);
 
 bot.start({

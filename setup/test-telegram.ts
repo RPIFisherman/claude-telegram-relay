@@ -7,6 +7,7 @@
  */
 
 import { join, dirname } from "path";
+import { buildTelegramAllowlist } from "../src/security.ts";
 
 const PROJECT_ROOT = dirname(import.meta.dir);
 
@@ -45,7 +46,16 @@ async function main() {
 
   const env = await loadEnv();
   const token = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
-  const userId = env.TELEGRAM_USER_ID || process.env.TELEGRAM_USER_ID || "";
+  const allowlist = buildTelegramAllowlist({
+    ...process.env,
+    ...env,
+  });
+  const targetId =
+    env.TELEGRAM_USER_ID ||
+    process.env.TELEGRAM_USER_ID ||
+    Array.from(allowlist.allowedUserIds)[0] ||
+    Array.from(allowlist.allowedChatIds)[0] ||
+    "";
 
   // Check token exists
   if (!token || token === "your_bot_token_from_botfather") {
@@ -55,13 +65,29 @@ async function main() {
   }
   console.log(`  ${PASS} Bot token found`);
 
-  // Check user ID exists
-  if (!userId || userId === "your_telegram_user_id") {
-    console.log(`  ${FAIL} TELEGRAM_USER_ID not set in .env`);
-    console.log(`      ${dim("Get yours from @userinfobot on Telegram")}`);
+  // Check allowlist exists
+  if (
+    allowlist.allowedUserIds.size === 0 &&
+    allowlist.allowedChatIds.size === 0
+  ) {
+    console.log(`  ${FAIL} Telegram allowlist not set in .env`);
+    console.log(
+      `      ${dim("Set TELEGRAM_ALLOWED_USER_IDS and optionally TELEGRAM_ALLOWED_CHAT_IDS")}`
+    );
     process.exit(1);
   }
-  console.log(`  ${PASS} User ID found: ${userId}`);
+  console.log(
+    `  ${PASS} Allowlist found: ${allowlist.allowedUserIds.size} users, ${allowlist.allowedChatIds.size} chats`
+  );
+
+  if (!targetId || targetId === "your_telegram_user_id") {
+    console.log(`  ${FAIL} No Telegram test target configured`);
+    console.log(
+      `      ${dim("Set TELEGRAM_USER_ID or at least one TELEGRAM_ALLOWED_USER_IDS / TELEGRAM_ALLOWED_CHAT_IDS value")}`
+    );
+    process.exit(1);
+  }
+  console.log(`  ${PASS} Test target: ${targetId}`);
 
   // Test bot token with getMe
   console.log(`\n  Testing bot token...`);
@@ -89,16 +115,18 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: userId,
-        text: "✅ Connection test successful! Your bot is working.",
-      }),
-    });
+          chat_id: targetId,
+          text: "✅ Connection test successful! Your bot is working.",
+        }),
+      });
     const msgData = await msgRes.json() as any;
 
     if (!msgData.ok) {
       if (msgData.description?.includes("chat not found")) {
-        console.log(`  ${FAIL} Could not reach user ${userId}`);
-        console.log(`      ${dim("Make sure you've started a conversation with your bot first.")}`);
+        console.log(`  ${FAIL} Could not reach target ${targetId}`);
+        console.log(
+          `      ${dim("For private chats, make sure you've started a conversation with your bot first.")}`
+        );
         console.log(`      ${dim("Open Telegram, find your bot, and send /start")}`);
       } else {
         console.log(`  ${FAIL} Send failed: ${msgData.description}`);

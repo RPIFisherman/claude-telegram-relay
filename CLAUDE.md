@@ -29,7 +29,8 @@ If this is a fresh clone, run `bun run setup` first to install dependencies and 
 
 **What you do:**
 1. Run `bun run setup` if `.env` does not exist yet
-2. Save `TELEGRAM_BOT_TOKEN` and `TELEGRAM_USER_ID` in `.env`
+2. Save `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_IDS` in `.env`
+3. If they want trusted groups or channels too, add `TELEGRAM_ALLOWED_CHAT_IDS`
 3. Run `bun run test:telegram` to verify — it sends a test message to the user
 
 **Done when:** Test message arrives on Telegram.

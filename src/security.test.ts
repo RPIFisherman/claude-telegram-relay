@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildTelegramAllowlist,
   buildClaudeEnv,
   getTelegramAccessDecision,
   isWithinLimit,
   parsePositiveInt,
+  parseIdList,
   sanitizeUploadFilename,
 } from "./security.ts";
 
@@ -11,41 +13,120 @@ describe("getTelegramAccessDecision", () => {
   test("fails closed when no allowed user is configured", () => {
     expect(
       getTelegramAccessDecision({
-        allowedUserId: "",
+        allowedUserIds: [],
+        allowedChatIds: [],
         fromId: "123",
+        chatId: "123",
         chatType: "private",
       })
     ).toBe("reject_unconfigured");
   });
 
-  test("rejects non-private chats", () => {
+  test("allows a configured private user", () => {
     expect(
       getTelegramAccessDecision({
-        allowedUserId: "123",
+        allowedUserIds: ["123"],
+        allowedChatIds: [],
         fromId: "123",
-        chatType: "group",
-      })
-    ).toBe("ignore_non_private");
-  });
-
-  test("rejects the wrong user", () => {
-    expect(
-      getTelegramAccessDecision({
-        allowedUserId: "123",
-        fromId: "456",
-        chatType: "private",
-      })
-    ).toBe("reject_unauthorized");
-  });
-
-  test("allows the configured user in a private chat", () => {
-    expect(
-      getTelegramAccessDecision({
-        allowedUserId: "123",
-        fromId: "123",
+        chatId: "123",
         chatType: "private",
       })
     ).toBe("allow");
+  });
+
+  test("allows a configured private chat", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: [],
+        allowedChatIds: ["123"],
+        fromId: "456",
+        chatId: "123",
+        chatType: "private",
+      })
+    ).toBe("allow");
+  });
+
+  test("rejects the wrong private user", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: ["123"],
+        allowedChatIds: [],
+        fromId: "456",
+        chatId: "456",
+        chatType: "private",
+      })
+    ).toBe("reject_chat_not_allowed");
+  });
+
+  test("requires an allowlisted chat for groups", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: ["123"],
+        allowedChatIds: [],
+        fromId: "123",
+        chatId: "-1001",
+        chatType: "supergroup",
+      })
+    ).toBe("reject_chat_not_allowed");
+  });
+
+  test("requires an allowlisted sender in allowlisted groups", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: ["123"],
+        allowedChatIds: ["-1001"],
+        fromId: "456",
+        chatId: "-1001",
+        chatType: "supergroup",
+      })
+    ).toBe("reject_chat_not_allowed");
+  });
+
+  test("allows trusted users in trusted groups", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: ["123"],
+        allowedChatIds: ["-1001"],
+        fromId: "123",
+        chatId: "-1001",
+        chatType: "supergroup",
+      })
+    ).toBe("allow");
+  });
+
+  test("allows allowlisted channels by chat id", () => {
+    expect(
+      getTelegramAccessDecision({
+        allowedUserIds: [],
+        allowedChatIds: ["-1009"],
+        chatId: "-1009",
+        chatType: "channel",
+      })
+    ).toBe("allow");
+  });
+});
+
+describe("allowlist parsing", () => {
+  test("splits comma and whitespace separated ids", () => {
+    expect(parseIdList("123, 456\n789")).toEqual(["123", "456", "789"]);
+  });
+
+  test("builds user and chat allowlists from env", () => {
+    const allowlist = buildTelegramAllowlist({
+      TELEGRAM_USER_ID: "111",
+      TELEGRAM_ALLOWED_USER_IDS: "222,333",
+      TELEGRAM_ALLOWED_CHAT_IDS: "-1001 -1002",
+    });
+
+    expect(Array.from(allowlist.allowedUserIds).sort()).toEqual([
+      "111",
+      "222",
+      "333",
+    ]);
+    expect(Array.from(allowlist.allowedChatIds).sort()).toEqual([
+      "-1001",
+      "-1002",
+    ]);
   });
 });
 

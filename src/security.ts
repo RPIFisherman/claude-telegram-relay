@@ -29,28 +29,72 @@ const DEFAULT_CLAUDE_ENV_KEYS = [
 
 export type TelegramAccessDecision =
   | "allow"
-  | "ignore_non_private"
-  | "reject_unauthorized"
+  | "reject_chat_not_allowed"
   | "reject_unconfigured";
 
+export interface TelegramAllowlist {
+  allowedUserIds: Set<string>;
+  allowedChatIds: Set<string>;
+}
+
+export function parseIdList(rawValue?: string): string[] {
+  return (rawValue || "")
+    .split(/[,\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+export function buildTelegramAllowlist(
+  env: Record<string, string | undefined>
+): TelegramAllowlist {
+  return {
+    allowedUserIds: new Set([
+      ...parseIdList(env.TELEGRAM_ALLOWED_USER_IDS),
+      ...parseIdList(env.TELEGRAM_USER_ID),
+    ]),
+    allowedChatIds: new Set(parseIdList(env.TELEGRAM_ALLOWED_CHAT_IDS)),
+  };
+}
+
+function toIdSet(values: Iterable<string>): Set<string> {
+  return values instanceof Set ? values : new Set(values);
+}
+
 export function getTelegramAccessDecision(input: {
-  allowedUserId: string;
+  allowedUserIds: Iterable<string>;
+  allowedChatIds: Iterable<string>;
   fromId?: string | null;
+  chatId?: string | number | null;
   chatType?: string | null;
 }): TelegramAccessDecision {
-  if (!input.allowedUserId) {
+  const allowedUserIds = toIdSet(input.allowedUserIds);
+  const allowedChatIds = toIdSet(input.allowedChatIds);
+  const fromId = input.fromId || null;
+  const chatId =
+    input.chatId === null || input.chatId === undefined
+      ? null
+      : String(input.chatId);
+
+  if (allowedUserIds.size === 0 && allowedChatIds.size === 0) {
     return "reject_unconfigured";
   }
 
-  if (input.chatType !== "private") {
-    return "ignore_non_private";
+  const userAllowed = fromId ? allowedUserIds.has(fromId) : false;
+  const chatAllowed = chatId ? allowedChatIds.has(chatId) : false;
+
+  if (input.chatType === "private") {
+    return userAllowed || chatAllowed ? "allow" : "reject_chat_not_allowed";
   }
 
-  if (!input.fromId || input.fromId !== input.allowedUserId) {
-    return "reject_unauthorized";
+  if (input.chatType === "channel") {
+    return chatAllowed ? "allow" : "reject_chat_not_allowed";
   }
 
-  return "allow";
+  if (!chatAllowed) {
+    return "reject_chat_not_allowed";
+  }
+
+  return userAllowed ? "allow" : "reject_chat_not_allowed";
 }
 
 export function sanitizeUploadFilename(

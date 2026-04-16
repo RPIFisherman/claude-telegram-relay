@@ -134,13 +134,15 @@ See `.env.example` for all options. The essentials:
 ```bash
 # Required
 TELEGRAM_BOT_TOKEN=     # From @BotFather
-TELEGRAM_USER_ID=       # From @userinfobot
+TELEGRAM_ALLOWED_USER_IDS=  # Comma-separated trusted user IDs from @userinfobot
+TELEGRAM_ALLOWED_CHAT_IDS=  # Optional comma-separated trusted group/channel chat IDs
 SUPABASE_URL=           # From Supabase dashboard
 SUPABASE_SERVICE_ROLE_KEY=  # From Supabase dashboard (keep private)
 
 # Recommended
 USER_NAME=              # Your first name
 USER_TIMEZONE=          # e.g., America/New_York
+TELEGRAM_USER_ID=       # Optional legacy single-user fallback / default outbound target
 
 # Optional — Voice
 VOICE_PROVIDER=         # "groq" or "local"
@@ -151,6 +153,8 @@ GROQ_API_KEY=           # For Groq (free at console.groq.com)
 ```
 
 Run this on a dedicated low-privilege account or isolated dev box if you can. The relay forwards your messages and attachments to a local Claude CLI, so the machine it runs on is part of the trust boundary.
+
+For access control, private chats are allowed when the sender is on `TELEGRAM_ALLOWED_USER_IDS`. Group and supergroup chats require the chat ID to be on `TELEGRAM_ALLOWED_CHAT_IDS` and the sender to be on `TELEGRAM_ALLOWED_USER_IDS`. Channels are allowed by chat ID only.
 
 ## What's Next
 

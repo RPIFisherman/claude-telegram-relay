@@ -9,6 +9,7 @@
 
 import { existsSync } from "fs";
 import { join, dirname } from "path";
+import { buildTelegramAllowlist } from "../src/security.ts";
 
 const PROJECT_ROOT = dirname(import.meta.dir);
 
@@ -65,7 +66,7 @@ async function main() {
   // 2. Telegram
   console.log(`\n${bold("  Telegram")}`);
   const token = env.TELEGRAM_BOT_TOKEN || "";
-  const userId = env.TELEGRAM_USER_ID || "";
+  const allowlist = buildTelegramAllowlist(env);
 
   if (!token || token.includes("your_")) {
     fail("TELEGRAM_BOT_TOKEN not set");
@@ -79,10 +80,15 @@ async function main() {
     }
   }
 
-  if (!userId || userId.includes("your_")) {
-    fail("TELEGRAM_USER_ID not set");
+  if (
+    allowlist.allowedUserIds.size === 0 &&
+    allowlist.allowedChatIds.size === 0
+  ) {
+    fail("No Telegram allowlist configured");
   } else {
-    pass(`User ID: ${userId}`);
+    pass(
+      `Allowlist: ${allowlist.allowedUserIds.size} users, ${allowlist.allowedChatIds.size} chats`
+    );
   }
 
   // 3. Supabase
