@@ -136,7 +136,7 @@ See `.env.example` for all options. The essentials:
 TELEGRAM_BOT_TOKEN=     # From @BotFather
 TELEGRAM_USER_ID=       # From @userinfobot
 SUPABASE_URL=           # From Supabase dashboard
-SUPABASE_ANON_KEY=      # From Supabase dashboard
+SUPABASE_SERVICE_ROLE_KEY=  # From Supabase dashboard (keep private)
 
 # Recommended
 USER_NAME=              # Your first name
@@ -149,6 +149,8 @@ GROQ_API_KEY=           # For Groq (free at console.groq.com)
 # Note: OpenAI key for embeddings is stored in Supabase
 # (Edge Function secrets), not in this .env file.
 ```
+
+Run this on a dedicated low-privilege account or isolated dev box if you can. The relay forwards your messages and attachments to a local Claude CLI, so the machine it runs on is part of the trust boundary.
 
 ## What's Next
 

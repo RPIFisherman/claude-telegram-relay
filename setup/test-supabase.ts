@@ -1,7 +1,7 @@
 /**
  * Claude Telegram Relay — Test Supabase Connection
  *
- * Verifies Supabase URL and anon key are valid, and checks if
+ * Verifies Supabase URL and service role key are valid, and checks if
  * required tables exist.
  *
  * Usage: bun run setup/test-supabase.ts
@@ -50,7 +50,8 @@ async function main() {
 
   const env = await loadEnv();
   const url = env.SUPABASE_URL || process.env.SUPABASE_URL || "";
-  const key = env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+  const key =
+    env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
   // Check URL
   if (!url || url === "your_project_url") {
@@ -61,12 +62,12 @@ async function main() {
   console.log(`  ${PASS} Supabase URL: ${url}`);
 
   // Check key
-  if (!key || key === "your_anon_key") {
-    console.log(`  ${FAIL} SUPABASE_ANON_KEY not set in .env`);
+  if (!key || key === "your_service_role_key") {
+    console.log(`  ${FAIL} SUPABASE_SERVICE_ROLE_KEY not set in .env`);
     console.log(`      ${dim("Get it from Supabase > Project Settings > API")}`);
     process.exit(1);
   }
-  console.log(`  ${PASS} Anon key found`);
+  console.log(`  ${PASS} Service role key found`);
 
   // Test connection by querying each required table
   console.log(`\n  Testing connection...`);

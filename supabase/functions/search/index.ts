@@ -15,6 +15,21 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 Deno.serve(async (req) => {
   try {
+    if (req.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!serviceRoleKey) {
+      return new Response("SUPABASE_SERVICE_ROLE_KEY not configured", {
+        status: 500,
+      });
+    }
+
+    if (req.headers.get("Authorization") !== `Bearer ${serviceRoleKey}`) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
     const {
       query,
       table = "messages",
@@ -22,9 +37,27 @@ Deno.serve(async (req) => {
       match_threshold = 0.7,
     } = await req.json();
 
-    if (!query) {
+    const normalizedQuery = String(query || "").trim();
+    if (!normalizedQuery) {
       return new Response("Missing query", { status: 400 });
     }
+
+    if (normalizedQuery.length > 4000) {
+      return new Response("Query too large", { status: 400 });
+    }
+
+    if (table !== "messages" && table !== "memory") {
+      return new Response("Invalid table", { status: 400 });
+    }
+
+    const normalizedMatchCount = Math.min(
+      Math.max(Number(match_count) || 10, 1),
+      10
+    );
+    const normalizedThreshold = Math.min(
+      Math.max(Number(match_threshold) || 0.7, 0),
+      1
+    );
 
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) {
@@ -42,7 +75,7 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify({
           model: "text-embedding-3-small",
-          input: query,
+          input: normalizedQuery,
         }),
       }
     );
@@ -65,8 +98,8 @@ Deno.serve(async (req) => {
 
     const { data: results, error } = await supabase.rpc(rpcName, {
       query_embedding: embedding,
-      match_threshold,
-      match_count,
+      match_threshold: normalizedThreshold,
+      match_count: normalizedMatchCount,
     });
 
     if (error) {

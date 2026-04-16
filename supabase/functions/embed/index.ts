@@ -14,10 +14,30 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 Deno.serve(async (req) => {
   try {
+    if (req.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    const webhookSecret = Deno.env.get("EMBED_WEBHOOK_SECRET");
+    if (
+      webhookSecret &&
+      req.headers.get("x-webhook-secret") !== webhookSecret
+    ) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
     const { record, table } = await req.json();
 
     if (!record?.content || !record?.id) {
       return new Response("Missing record data", { status: 400 });
+    }
+
+    if (table !== "messages" && table !== "memory") {
+      return new Response("Invalid table", { status: 400 });
+    }
+
+    if (String(record.content).length > 16000) {
+      return new Response("Content too large", { status: 400 });
     }
 
     // Skip if embedding already exists

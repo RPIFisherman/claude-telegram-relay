@@ -88,18 +88,21 @@ async function main() {
   // 3. Supabase
   console.log(`\n${bold("  Supabase")}`);
   const supaUrl = env.SUPABASE_URL || "";
-  const supaKey = env.SUPABASE_ANON_KEY || "";
+  const supaKey = env.SUPABASE_SERVICE_ROLE_KEY || "";
 
   if (!supaUrl || supaUrl.includes("your_")) {
     warn("SUPABASE_URL not set (memory won't persist)");
   } else if (!supaKey || supaKey.includes("your_")) {
-    warn("SUPABASE_ANON_KEY not set");
+    warn("SUPABASE_SERVICE_ROLE_KEY not set");
   } else {
     for (const table of ["messages", "memory", "logs"]) {
       try {
-        const res = await fetch(`${supaUrl}/rest/v1/${table}?select=*&limit=1`, {
-          headers: { apikey: supaKey, Authorization: `Bearer ${supaKey}` },
-        });
+        const res = await fetch(
+          `${supaUrl}/rest/v1/${table}?select=*&limit=1`,
+          {
+            headers: { apikey: supaKey, Authorization: `Bearer ${supaKey}` },
+          }
+        );
         res.status === 200 ? pass(`Table "${table}" OK`) : fail(`Table "${table}": ${res.status}`);
       } catch (e: any) {
         fail(`Supabase unreachable: ${e.message}`);

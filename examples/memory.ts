@@ -122,7 +122,7 @@ If you want cloud persistence and semantic search, use Supabase:
 
 1. Create a Supabase project at https://supabase.com
 2. Run the schema from examples/supabase-schema.sql
-3. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env
+3. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env
 
 Example Supabase implementation:
 
@@ -130,7 +130,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
 export async function addFactSupabase(fact: string): Promise<string> {

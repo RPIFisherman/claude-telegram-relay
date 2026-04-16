@@ -51,10 +51,10 @@ Your bot's memory lives in Supabase: conversation history, facts, goals, and sem
 2. Create a new project (any name, any region close to them)
 3. Wait ~2 minutes for it to provision
 4. Go to Project Settings > API
-5. Copy: Project URL and anon public key
+5. Copy: Project URL and service role key
 
 **What you do:**
-1. Save `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env`
+1. Save `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to `.env`
 
 ### Step 2: Connect Supabase MCP
 

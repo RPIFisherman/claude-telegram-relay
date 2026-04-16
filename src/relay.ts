@@ -9,8 +9,10 @@
 
 import { Bot, Context } from "grammy";
 import { spawn } from "bun";
+import { unlinkSync } from "fs";
 import { writeFile, mkdir, readFile, unlink } from "fs/promises";
 import { join, dirname } from "path";
+import { randomUUID } from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { transcribe } from "./transcribe.ts";
 import {
@@ -18,6 +20,13 @@ import {
   getMemoryContext,
   getRelevantContext,
 } from "./memory.ts";
+import {
+  buildClaudeEnv,
+  getTelegramAccessDecision,
+  isWithinLimit,
+  parsePositiveInt,
+  sanitizeUploadFilename,
+} from "./security.ts";
 
 const PROJECT_ROOT = dirname(dirname(import.meta.path));
 
@@ -30,6 +39,19 @@ const ALLOWED_USER_ID = process.env.TELEGRAM_USER_ID || "";
 const CLAUDE_PATH = process.env.CLAUDE_PATH || "claude";
 const PROJECT_DIR = process.env.PROJECT_DIR || "";
 const RELAY_DIR = process.env.RELAY_DIR || join(process.env.HOME || "~", ".claude-relay");
+const MAX_TEXT_CHARS = parsePositiveInt(process.env.MAX_TEXT_CHARS, 12000);
+const MAX_IMAGE_BYTES = parsePositiveInt(process.env.MAX_IMAGE_BYTES, 10 * 1024 * 1024);
+const MAX_DOCUMENT_BYTES = parsePositiveInt(
+  process.env.MAX_DOCUMENT_BYTES,
+  10 * 1024 * 1024
+);
+const MAX_VOICE_BYTES = parsePositiveInt(process.env.MAX_VOICE_BYTES, 20 * 1024 * 1024);
+const MAX_REQUESTS_PER_MINUTE = parsePositiveInt(
+  process.env.MAX_REQUESTS_PER_MINUTE,
+  12
+);
+const REQUEST_WINDOW_MS = 60_000;
+const requestTimestamps: number[] = [];
 
 // Directories
 const TEMP_DIR = join(RELAY_DIR, "temp");
@@ -57,7 +79,9 @@ async function loadSession(): Promise<SessionState> {
 }
 
 async function saveSession(state: SessionState): Promise<void> {
-  await writeFile(SESSION_FILE, JSON.stringify(state, null, 2));
+  await writeFile(SESSION_FILE, JSON.stringify(state, null, 2), {
+    mode: 0o600,
+  });
 }
 
 let session = await loadSession();
@@ -83,7 +107,7 @@ async function acquireLock(): Promise<boolean> {
       }
     }
 
-    await writeFile(LOCK_FILE, process.pid.toString());
+    await writeFile(LOCK_FILE, process.pid.toString(), { mode: 0o600 });
     return true;
   } catch (error) {
     console.error("Lock error:", error);
@@ -98,7 +122,7 @@ async function releaseLock(): Promise<void> {
 // Cleanup on exit
 process.on("exit", () => {
   try {
-    require("fs").unlinkSync(LOCK_FILE);
+    unlinkSync(LOCK_FILE);
   } catch {}
 });
 process.on("SIGINT", async () => {
@@ -123,18 +147,38 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
+if (!ALLOWED_USER_ID) {
+  console.error("TELEGRAM_USER_ID not set!");
+  console.log("\nRefusing to start without an authorized Telegram user.");
+  process.exit(1);
+}
+
 // Create directories
-await mkdir(TEMP_DIR, { recursive: true });
-await mkdir(UPLOADS_DIR, { recursive: true });
+await mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
+await mkdir(UPLOADS_DIR, { recursive: true, mode: 0o700 });
 
 // ============================================================
 // SUPABASE (optional — only if configured)
 // ============================================================
 
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
 const supabase: SupabaseClient | null =
-  process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
-    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+      })
     : null;
+
+if (SUPABASE_URL && !SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn(
+    "SUPABASE_URL is set without SUPABASE_SERVICE_ROLE_KEY. Persistent memory is disabled."
+  );
+}
 
 async function saveMessage(
   role: string,
@@ -167,15 +211,42 @@ const bot = new Bot(BOT_TOKEN);
 // ============================================================
 
 bot.use(async (ctx, next) => {
-  const userId = ctx.from?.id.toString();
+  const decision = getTelegramAccessDecision({
+    allowedUserId: ALLOWED_USER_ID,
+    fromId: ctx.from?.id.toString(),
+    chatType: ctx.chat?.type,
+  });
 
-  // If ALLOWED_USER_ID is set, enforce it
-  if (ALLOWED_USER_ID && userId !== ALLOWED_USER_ID) {
-    console.log(`Unauthorized: ${userId}`);
+  if (decision === "ignore_non_private") {
+    console.log(`Ignoring non-private chat: ${ctx.chat?.id}`);
+    return;
+  }
+
+  if (decision === "reject_unauthorized") {
+    console.log(`Unauthorized private chat access: ${ctx.from?.id}`);
     await ctx.reply("This bot is private.");
     return;
   }
 
+  if (decision !== "allow") {
+    console.log("Access denied: TELEGRAM_USER_ID is not configured correctly.");
+    return;
+  }
+
+  const now = Date.now();
+  while (
+    requestTimestamps.length > 0 &&
+    now - requestTimestamps[0] > REQUEST_WINDOW_MS
+  ) {
+    requestTimestamps.shift();
+  }
+
+  if (requestTimestamps.length >= MAX_REQUESTS_PER_MINUTE) {
+    await ctx.reply("Too many requests. Please wait a minute and try again.");
+    return;
+  }
+
+  requestTimestamps.push(now);
   await next();
 });
 
@@ -203,10 +274,7 @@ async function callClaude(
       stdout: "pipe",
       stderr: "pipe",
       cwd: PROJECT_DIR || undefined,
-      env: {
-        ...process.env,
-        // Pass through any env vars Claude might need
-      },
+      env: buildClaudeEnv(process.env),
     });
 
     const output = await new Response(proc.stdout).text();
@@ -243,6 +311,13 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
   console.log(`Message: ${text.substring(0, 50)}...`);
 
+  if (text.length > MAX_TEXT_CHARS) {
+    await ctx.reply(
+      `Message too long. Limit is ${MAX_TEXT_CHARS.toLocaleString()} characters.`
+    );
+    return;
+  }
+
   await ctx.replyWithChatAction("typing");
 
   await saveMessage("user", text);
@@ -278,6 +353,15 @@ bot.on("message:voice", async (ctx) => {
   }
 
   try {
+    if (!isWithinLimit(voice.file_size, MAX_VOICE_BYTES)) {
+      await ctx.reply(
+        `Voice message too large. Limit is ${Math.floor(
+          MAX_VOICE_BYTES / (1024 * 1024)
+        )} MB.`
+      );
+      return;
+    }
+
     const file = await ctx.getFile();
     const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
     const response = await fetch(url);
@@ -321,32 +405,40 @@ bot.on("message:photo", async (ctx) => {
     // Get highest resolution photo
     const photos = ctx.message.photo;
     const photo = photos[photos.length - 1];
+
+    if (!isWithinLimit(photo.file_size, MAX_IMAGE_BYTES)) {
+      await ctx.reply(
+        `Image too large. Limit is ${Math.floor(MAX_IMAGE_BYTES / (1024 * 1024))} MB.`
+      );
+      return;
+    }
+
     const file = await ctx.api.getFile(photo.file_id);
 
     // Download the image
-    const timestamp = Date.now();
-    const filePath = join(UPLOADS_DIR, `image_${timestamp}.jpg`);
+    const filePath = join(UPLOADS_DIR, `image_${randomUUID()}.jpg`);
 
-    const response = await fetch(
-      `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`
-    );
-    const buffer = await response.arrayBuffer();
-    await writeFile(filePath, Buffer.from(buffer));
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`
+      );
+      const buffer = await response.arrayBuffer();
+      await writeFile(filePath, Buffer.from(buffer), { mode: 0o600 });
 
-    // Claude Code can see images via file path
-    const caption = ctx.message.caption || "Analyze this image.";
-    const prompt = `[Image: ${filePath}]\n\n${caption}`;
+      // Claude Code can see images via file path
+      const caption = ctx.message.caption || "Analyze this image.";
+      const prompt = `[Image: ${filePath}]\n\n${caption}`;
 
-    await saveMessage("user", `[Image]: ${caption}`);
+      await saveMessage("user", `[Image]: ${caption}`);
 
-    const claudeResponse = await callClaude(prompt, { resume: true });
+      const claudeResponse = await callClaude(prompt, { resume: true });
+      const cleanResponse = await processMemoryIntents(supabase, claudeResponse);
 
-    // Cleanup after processing
-    await unlink(filePath).catch(() => {});
-
-    const cleanResponse = await processMemoryIntents(supabase, claudeResponse);
-    await saveMessage("assistant", cleanResponse);
-    await sendResponse(ctx, cleanResponse);
+      await saveMessage("assistant", cleanResponse);
+      await sendResponse(ctx, cleanResponse);
+    } finally {
+      await unlink(filePath).catch(() => {});
+    }
   } catch (error) {
     console.error("Image error:", error);
     await ctx.reply("Could not process image.");
@@ -361,28 +453,38 @@ bot.on("message:document", async (ctx) => {
 
   try {
     const file = await ctx.getFile();
-    const timestamp = Date.now();
-    const fileName = doc.file_name || `file_${timestamp}`;
-    const filePath = join(UPLOADS_DIR, `${timestamp}_${fileName}`);
+    if (!isWithinLimit(doc.file_size, MAX_DOCUMENT_BYTES)) {
+      await ctx.reply(
+        `Document too large. Limit is ${Math.floor(
+          MAX_DOCUMENT_BYTES / (1024 * 1024)
+        )} MB.`
+      );
+      return;
+    }
 
-    const response = await fetch(
-      `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`
-    );
-    const buffer = await response.arrayBuffer();
-    await writeFile(filePath, Buffer.from(buffer));
+    const safeName = sanitizeUploadFilename(doc.file_name, "document.bin");
+    const filePath = join(UPLOADS_DIR, `${randomUUID()}_${safeName}`);
 
-    const caption = ctx.message.caption || `Analyze: ${doc.file_name}`;
-    const prompt = `[File: ${filePath}]\n\n${caption}`;
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`
+      );
+      const buffer = await response.arrayBuffer();
+      await writeFile(filePath, Buffer.from(buffer), { mode: 0o600 });
 
-    await saveMessage("user", `[Document: ${doc.file_name}]: ${caption}`);
+      const caption = ctx.message.caption || `Analyze: ${safeName}`;
+      const prompt = `[File: ${filePath}]\n\n${caption}`;
 
-    const claudeResponse = await callClaude(prompt, { resume: true });
+      await saveMessage("user", `[Document: ${safeName}]: ${caption}`);
 
-    await unlink(filePath).catch(() => {});
+      const claudeResponse = await callClaude(prompt, { resume: true });
+      const cleanResponse = await processMemoryIntents(supabase, claudeResponse);
 
-    const cleanResponse = await processMemoryIntents(supabase, claudeResponse);
-    await saveMessage("assistant", cleanResponse);
-    await sendResponse(ctx, cleanResponse);
+      await saveMessage("assistant", cleanResponse);
+      await sendResponse(ctx, cleanResponse);
+    } finally {
+      await unlink(filePath).catch(() => {});
+    }
   } catch (error) {
     console.error("Document error:", error);
     await ctx.reply("Could not process document.");
@@ -483,7 +585,7 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
 // ============================================================
 
 console.log("Starting Claude Telegram Relay...");
-console.log(`Authorized user: ${ALLOWED_USER_ID || "ANY (not recommended)"}`);
+console.log(`Authorized user: ${ALLOWED_USER_ID}`);
 console.log(`Project directory: ${PROJECT_DIR || "(relay working directory)"}`);
 
 bot.start({

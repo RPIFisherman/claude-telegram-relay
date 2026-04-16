@@ -5,8 +5,9 @@
  */
 
 import { spawn } from "bun";
-import { writeFile, readFile, unlink } from "fs/promises";
+import { writeFile, readFile, mkdtemp, rm } from "fs/promises";
 import { join } from "path";
+import { randomUUID } from "crypto";
 
 const VOICE_PROVIDER = process.env.VOICE_PROVIDER || "";
 
@@ -51,15 +52,16 @@ async function transcribeLocal(audioBuffer: Buffer): Promise<string> {
     throw new Error("WHISPER_MODEL_PATH not set");
   }
 
-  const timestamp = Date.now();
   const tmpDir = process.env.TMPDIR || "/tmp";
-  const oggPath = join(tmpDir, `voice_${timestamp}.ogg`);
-  const wavPath = join(tmpDir, `voice_${timestamp}.wav`);
-  const txtPath = join(tmpDir, `voice_${timestamp}.txt`);
+  const workDir = await mkdtemp(join(tmpDir, "relay-voice-"));
+  const stem = randomUUID();
+  const oggPath = join(workDir, `${stem}.ogg`);
+  const wavPath = join(workDir, `${stem}.wav`);
+  const txtPath = join(workDir, `${stem}.txt`);
 
   try {
     // Write OGG to temp file
-    await writeFile(oggPath, audioBuffer);
+    await writeFile(oggPath, audioBuffer, { mode: 0o600 });
 
     // Convert OGG → WAV via ffmpeg
     const ffmpeg = spawn(
@@ -74,7 +76,17 @@ async function transcribeLocal(audioBuffer: Buffer): Promise<string> {
 
     // Transcribe via whisper.cpp
     const whisper = spawn(
-      [whisperBinary, "--model", modelPath, "--file", wavPath, "--output-txt", "--output-file", join(tmpDir, `voice_${timestamp}`), "--no-prints"],
+      [
+        whisperBinary,
+        "--model",
+        modelPath,
+        "--file",
+        wavPath,
+        "--output-txt",
+        "--output-file",
+        join(workDir, stem),
+        "--no-prints",
+      ],
       { stdout: "pipe", stderr: "pipe" }
     );
     const whisperExit = await whisper.exited;
@@ -88,8 +100,6 @@ async function transcribeLocal(audioBuffer: Buffer): Promise<string> {
     return text.trim();
   } finally {
     // Cleanup temp files
-    await unlink(oggPath).catch(() => {});
-    await unlink(wavPath).catch(() => {});
-    await unlink(txtPath).catch(() => {});
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
 }

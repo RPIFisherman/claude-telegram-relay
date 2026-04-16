@@ -64,10 +64,15 @@ ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
 
--- Allow all for service role (your bot uses service key)
-CREATE POLICY "Allow all for service role" ON messages FOR ALL USING (true);
-CREATE POLICY "Allow all for service role" ON memory FOR ALL USING (true);
-CREATE POLICY "Allow all for service role" ON logs FOR ALL USING (true);
+DROP POLICY IF EXISTS "Allow all for service role" ON messages;
+DROP POLICY IF EXISTS "Allow all for service role" ON memory;
+DROP POLICY IF EXISTS "Allow all for service role" ON logs;
+
+-- No public RLS policies.
+-- The relay and Edge Functions should use SUPABASE_SERVICE_ROLE_KEY.
+REVOKE ALL ON TABLE messages FROM anon, authenticated;
+REVOKE ALL ON TABLE memory FROM anon, authenticated;
+REVOKE ALL ON TABLE logs FROM anon, authenticated;
 
 -- ============================================================
 -- HELPER FUNCTIONS
@@ -90,6 +95,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+REVOKE ALL ON FUNCTION get_recent_messages(INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_recent_messages(INTEGER) TO service_role;
+
 -- Get active goals
 CREATE OR REPLACE FUNCTION get_active_goals()
 RETURNS TABLE (
@@ -107,6 +115,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+REVOKE ALL ON FUNCTION get_active_goals() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_active_goals() TO service_role;
+
 -- Get all facts
 CREATE OR REPLACE FUNCTION get_facts()
 RETURNS TABLE (
@@ -121,6 +132,9 @@ BEGIN
   ORDER BY m.created_at DESC;
 END;
 $$ LANGUAGE plpgsql;
+
+REVOKE ALL ON FUNCTION get_facts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_facts() TO service_role;
 
 -- ============================================================
 -- SEMANTIC SEARCH (Optional - requires embeddings)
@@ -154,3 +168,6 @@ BEGIN
   LIMIT match_count;
 END;
 $$ LANGUAGE plpgsql;
+
+REVOKE ALL ON FUNCTION match_messages(VECTOR, FLOAT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION match_messages(VECTOR, FLOAT, INT) TO service_role;
